@@ -1,0 +1,7 @@
+name = Password recovery
+description = "Common module for site"
+core = 7.x
+scripts[] = pwd_recovery.js
+
+
+

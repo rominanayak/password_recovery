@@ -1,0 +1,190 @@
+<?php
+
+/**
+ * @file
+ * Common functionality related hooks and functions.
+ */
+
+/**
+ * Function for printing array in readable format without die().
+ */
+function p($dt) {
+  echo "<pre>";
+  print_r($dt);
+  echo "</pre>";
+  die;
+}
+
+function pwd_recovery_init() {
+  if (arg(0) == 'user' && arg(1) == 'password') {
+    drupal_goto('recovery_page');
+  }
+}
+
+/**
+ * Implements hook_form_alter()
+ * @param array $form
+ * @param type $form_state
+ * @param type $form_id
+ */
+function pwd_recovery_form_alter(&$form, &$form_state, $form_id) {
+  global $base_path;
+  $images = array();
+  if ($form_id == 'user_register_form') {//p($form);
+    // Retrieving & creating hidden images for each security image choice.
+      $form['field_user_profile_sec_image']['#suffix'] = '';
+      foreach ($form['field_user_profile_sec_image']['und']['#options'] as $img_name) {
+        $img_name = strtolower($img_name);
+        $variables = array(
+        'path' => $base_path . 'sites/default/files/' . $img_name . '_1.PNG', 
+        'alt' => 'Graphical password recovery',
+        'title' => $img_name,
+        'width' => '700',
+        'height' => '500',
+        'attributes' => array('id' => 'create-sec-img'),
+        );
+        $img = theme('image', $variables);
+        $form['field_user_profile_sec_image']['#suffix'] .= "<div style='display:none' id='sec_image_display_" . $img_name . "' class='security-images'>" . $img . "</div>";
+      }
+    }
+}
+
+
+/**
+ * Implements hook_menu(). 
+ */
+function pwd_recovery_menu() {
+    $items['recovery_page'] = array(
+      'page callback' => 'drupal_get_form',
+      'page arguments' => array('recovery_form'),
+      'access callback' => TRUE,
+    );
+    $items['recovery_page/%'] = array(
+      'page callback' => 'drupal_get_form',
+      'page arguments' => array('recovery_form', 1),
+      'access callback' => TRUE,
+    );
+    return $items;
+  }
+
+  function recovery_form($form, &$form_state, $uid = NULL) {
+    global $base_path;
+    if ($uid == NULL) {
+      drupal_set_title("Recover Password");
+      $form['username'] = array(
+        '#title' => t('Username'), 
+        '#required' => TRUE, 
+        '#type' => 'textfield',
+          );
+      $form['submit'] = array('#type' => 'submit', '#value' => 'Get recovery options');
+    } 
+    else if (is_numeric($uid) && (!isset($_SESSION['attempts_left']) || (isset($_SESSION['attempts_left']) && $_SESSION['attempts_left'] > 0))) {
+      $user = (array) user_load($uid);//p($user);
+      $sec_image = (array) taxonomy_term_load($user['field_user_profile_sec_image']['und'][0]['tid']);
+      $version_no = rand(2,3);
+      $sec_image_name = strtolower($sec_image['name']) . "_" . $version_no . ".PNG";
+      //Graphical password recovery image chosen by the user on account creation
+      $variables = array(
+        'path' => $base_path . 'sites/default/files/' . $sec_image_name, 
+        'alt' => 'Test alt',
+        'title' => '$sec_image["name"]',
+        'width' => '700',
+        'height' => '500',
+        'attributes' => array('id' => 'sec-img'),
+      );
+      $img = theme('image', $variables);
+      $form['recovery_sec_image'] = array(
+        '#title' => t('Recovery Image'),
+        '#markup' => $img,
+          );
+      
+      $form['image_name'] = array(
+        '#type' => 'hidden', 
+        '#value' => strtolower($sec_image['name']),
+          );
+      
+      $form['image_version'] = array(
+        '#type' => 'hidden', 
+        '#value' => 'version_' . $version_no,
+          );
+      
+      $form['org_image_ans'] = array(
+        '#type' => 'hidden', 
+        '#value' => $user['field_user_profile_fav_object']['und'][0]['value'],
+          );
+      
+      $form['recovery_sec_image_ans'] = array(
+        '#title' => t('Enter your favorite object number'), 
+        '#required' => TRUE, 
+        '#type' => 'textfield',
+        );
+      
+      $sec_ques = (array) taxonomy_term_load($user['field_user_profile_sec_question']['und'][0]['tid']);
+      $form['recovery_sec_ques'] = array(
+       '#type' => 'select',
+       '#title' => t('<b>Security Question: </b>' . $sec_ques['name']),
+       '#options' => array(
+          'like' => t('Like'),
+          'dislike' => t('Dislike'),
+          'dont_care' => t('Don\'t Care'),
+          ),
+       '#required' => TRUE,
+//       '#description' => t('Set this to <em>Yes</em> if you would like this category to be selected by default.'),
+        );
+      
+      $form['org_ques_ans'] = array(
+        '#type' => 'hidden', 
+        '#value' => $user['field_user_profile_options']['und'][0]['value'],
+          );
+      
+      $form['submit'] = array(
+        '#type' => 'submit', 
+        '#value' => 'Submit'
+        );
+      if (!isset($_SESSION['attempts_left'])) {
+        $_SESSION['attempts_left'] = 3;
+      }
+      
+    } 
+    else if (arg(1) != '' && isset($_SESSION['attempts_left']) && $_SESSION['attempts_left'] == 0) {
+      drupal_set_message("You have used all your attempts! Please try again after some time.");
+      $_SESSION['attempts_left'] = $_SESSION['attempts_left'] - 1;
+    } else if ($_SESSION['attempts_left'] < 0) {
+      unset($_SESSION['attempts_left']);
+    }
+    return $form;
+  }
+  
+  function recovery_form_validate($form, &$form_state) {//p($form_state['values']);
+    // Check if entered answers are correct.
+    if (is_numeric(arg(1)) && isset($form_state['values']['image_version']) ) {
+//      print $form_state['values']['image_version'].':'.$form_state['values']['image_name'].':'.$form_state['values']['org_image_ans'];
+      $relative_ans = db_query("SELECT " . $form_state['values']['image_version'] . " from image_version_mapping where image_id = :image_id && version_1 = :org_user_ans", 
+          array(":image_id" => $form_state['values']['image_name'], ":org_user_ans" => $form_state['values']['org_image_ans']))->fetchField();
+//      print $form_state['input']['recovery_sec_image_ans'] . ':';p($relative_ans);
+      if ($form_state['input']['recovery_sec_image_ans'] == $relative_ans && $form_state['values']['recovery_sec_ques'] == $form_state['values']['org_ques_ans']) {
+        $_SESSION['success'] = TRUE;
+      } else {
+        $_SESSION['success'] = FALSE;
+        $_SESSION['attempts_left'] = $_SESSION['attempts_left'] - 1;
+        form_set_error('',"The answers did not match. Please try again! [" . $_SESSION['attempts_left'] . " attempts left]");
+      }
+    }
+  }
+  
+  function recovery_form_submit($form, &$form_state) {
+    global $base_path;
+    if (arg(1) == '') {
+      $user = user_load_by_name($form_state['values']['username']);
+      $user_id = $user->uid;
+      $form_state['redirect'] = 'recovery_page/' . $user_id;
+    } else if (is_numeric(arg(1)) && $_SESSION['success'] == TRUE) {
+      $form_state['redirect'] = 'recovery_success_page';
+      $_SESSION['success'] = FALSE;
+    }
+  }
+  
+  function recovery_success_page() {
+    drupal_set_message("You have successfully recovered your password..Hurray!");
+    return true;
+  }
